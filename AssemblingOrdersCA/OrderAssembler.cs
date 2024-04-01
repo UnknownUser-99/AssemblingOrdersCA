@@ -26,8 +26,15 @@ namespace AssemblingOrdersCA
                 Console.WriteLine(line);
                 Console.WriteLine($"Сборка заказов {string.Join(", ", orderNumbers)}\n");
 
-                var ordersWithData = GetOrdersWithData(orderNumbers);
-                var ordersWithoutData = orderNumbers.Except(ordersWithData).ToList();
+                var ordersWithData = dbContext.ProductOrder
+                    .Include(po => po.Order)
+                    .Include(po => po.Product)
+                    .ThenInclude(p => p.ProductShelf)
+                    .ThenInclude(ps => ps.Shelf)
+                    .Where(po => orderNumbers.Contains(po.OrderID))
+                    .ToList();
+
+                var ordersWithoutData = orderNumbers.Except(ordersWithData.Select(po => po.OrderID)).ToList();
 
                 DisplayMainShelvesWithData(ordersWithData, line);
                 DisplayOrdersWithoutData(ordersWithoutData, line);
@@ -40,22 +47,11 @@ namespace AssemblingOrdersCA
             }
         }
 
-        private List<int> GetOrdersWithData(int[] orderNumbers)
+        private void DisplayMainShelvesWithData(List<ProductOrder> ordersWithData, string line)
         {
-            return dbContext.ProductOrder
-                .Where(po => orderNumbers.Contains(po.OrderID))
-                .Select(po => po.OrderID)
-                .Distinct()
-                .ToList();
-        }
-
-        private void DisplayMainShelvesWithData(List<int> ordersWithData, string line)
-        {
-            var mainShelvesWithProducts = dbContext.ProductShelf
-                .Include(ps => ps.Product)
-                .Include(ps => ps.Shelf)
-                .Where(ps => ordersWithData.Contains(ps.Product.ProductOrder.FirstOrDefault().OrderID) && ps.IsMainShelf)
-                .GroupBy(ps => ps.Shelf.ShelfName)
+            var mainShelvesWithProducts = ordersWithData
+                .Where(po => po.Product.ProductShelf.Any(ps => ps.IsMainShelf))
+                .GroupBy(po => po.Product.ProductShelf.First(ps => ps.IsMainShelf).Shelf.ShelfName)
                 .ToList();
 
             foreach (var shelfGroup in mainShelvesWithProducts)
@@ -63,22 +59,16 @@ namespace AssemblingOrdersCA
                 Console.WriteLine(line);
                 Console.WriteLine($"Стеллаж {shelfGroup.Key}\n");
 
-                foreach (var productInShelf in shelfGroup)
+                foreach (var productOrder in shelfGroup)
                 {
-                    Console.WriteLine($"{productInShelf.Product.ProductName} (id {productInShelf.ProductID}):");
+                    var product = productOrder.Product;
+                    var shelf = product.ProductShelf.First(ps => ps.IsMainShelf).Shelf;
 
-                    var ordersForProduct = dbContext.ProductOrder
-                        .Where(po => po.ProductID == productInShelf.ProductID && ordersWithData.Contains(po.OrderID))
-                        .ToList();
+                    Console.WriteLine($"{product.ProductName} (id {product.ProductID}):");
+                    Console.WriteLine($"заказ {productOrder.OrderID}, количество {productOrder.ProductOrderQuantity} шт");
 
-                    foreach (var order in ordersForProduct)
-                    {
-                        Console.WriteLine($"заказ {order.OrderID}, количество {order.ProductOrderQuantity} шт");
-                    }
-
-                    var additionalShelves = dbContext.ProductShelf
-                        .Include(ps => ps.Shelf)
-                        .Where(ps => ps.ProductID == productInShelf.ProductID && !ps.IsMainShelf && ordersWithData.Contains(ps.Product.ProductOrder.FirstOrDefault().OrderID))
+                    var additionalShelves = product.ProductShelf
+                        .Where(ps => !ps.IsMainShelf)
                         .Select(ps => ps.Shelf.ShelfName)
                         .Distinct()
                         .ToList();
